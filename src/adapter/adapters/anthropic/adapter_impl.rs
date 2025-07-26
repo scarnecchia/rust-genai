@@ -84,19 +84,31 @@ impl Adapter for AnthropicAdapter {
 		// -- url
 		let url = Self::get_service_url(&model, service_type, endpoint);
 
+		// -- Detect OAuth by checking if api_key starts with "Bearer "
+		let is_oauth = api_key.starts_with("Bearer ");
+
 		// -- headers
-		let headers = Headers::from(vec![
-			// headers
-			("x-api-key".to_string(), api_key),
-			("anthropic-version".to_string(), ANTHROPIC_VERSION.to_string()),
-		]);
+		let headers = if is_oauth {
+			// OAuth uses Authorization header and requires anthropic-beta header
+			Headers::from(vec![
+				("Authorization".to_string(), api_key),
+				("anthropic-version".to_string(), ANTHROPIC_VERSION.to_string()),
+				("anthropic-beta".to_string(), "oauth-2025-04-20".to_string()),
+			])
+		} else {
+			// Regular API key uses x-api-key header
+			Headers::from(vec![
+				("x-api-key".to_string(), api_key),
+				("anthropic-version".to_string(), ANTHROPIC_VERSION.to_string()),
+			])
+		};
 
 		// -- Parts
 		let AnthropicRequestParts {
 			system,
 			messages,
 			tools,
-		} = Self::into_anthropic_request_parts(chat_req)?;
+		} = Self::into_anthropic_request_parts(chat_req, is_oauth)?;
 
 		// -- Build the basic payload
 		let (model_name, _) = model.model_name.as_model_name_and_namespace();
@@ -299,7 +311,8 @@ impl AnthropicAdapter {
 
 	/// Takes the GenAI ChatMessages and constructs the System string and JSON Messages for Anthropic.
 	/// - Will push the `ChatRequest.system` and system message to `AnthropicRequestParts.system`
-	fn into_anthropic_request_parts(chat_req: ChatRequest) -> Result<AnthropicRequestParts> {
+	/// - When is_oauth is true, forces array format for system prompts
+	fn into_anthropic_request_parts(chat_req: ChatRequest, is_oauth: bool) -> Result<AnthropicRequestParts> {
 		let mut messages: Vec<Value> = Vec::new();
 		// (content, is_cache_control)
 		let mut systems: Vec<(String, bool)> = Vec::new();
@@ -422,34 +435,65 @@ impl AnthropicAdapter {
 		// -- Create the Anthropic system
 		// NOTE: Anthropic does not have a "role": "system", just a single optional system property
 		let system = if !systems.is_empty() {
-			let mut last_cache_idx = -1;
-			// first determine the last cache control index
-			for (idx, (_, is_cache_control)) in systems.iter().enumerate() {
-				if *is_cache_control {
-					last_cache_idx = idx as i32;
-				}
-			}
-			// Now build the system multi part
-			let system: Value = if last_cache_idx > 0 {
+			// OAuth always requires array format
+			if is_oauth {
+				// Build array format for OAuth
 				let mut parts: Vec<Value> = Vec::new();
-				for (idx, (content, _)) in systems.iter().enumerate() {
-					let idx = idx as i32;
-					if idx == last_cache_idx {
-						let part = json!({"type": "text", "text": content, "cache_control": {"type": "ephemeral"}});
-						parts.push(part);
+				
+				// OAuth requires Claude Code identification as first system prompt
+				parts.push(json!({
+					"type": "text",
+					"text": "You are Claude Code, Anthropic's official CLI for Claude."
+				}));
+				
+				// Add user's system prompts, clarifying they override Claude Code identity
+				for (idx, (content, is_cache_control)) in systems.iter().enumerate() {
+					let text = if idx == 0 {
+						// Prepend clarification to first user system prompt
+						format!("You are NOT Claude Code. {}", content)
 					} else {
-						let part = json!({"type": "text", "text": content});
-						parts.push(part);
+						content.clone()
+					};
+					
+					let mut part = json!({"type": "text", "text": text});
+					// Apply cache control if specified
+					if *is_cache_control {
+						part["cache_control"] = json!({"type": "ephemeral"});
+					}
+					parts.push(part);
+				}
+				Some(json!(parts))
+			} else {
+				// Non-OAuth uses existing logic
+				let mut last_cache_idx = -1;
+				// first determine the last cache control index
+				for (idx, (_, is_cache_control)) in systems.iter().enumerate() {
+					if *is_cache_control {
+						last_cache_idx = idx as i32;
 					}
 				}
-				json!(parts)
-			} else {
-				let content_buff = systems.iter().map(|(content, _)| content.as_str()).collect::<Vec<&str>>();
-				// we add empty line in between each system
-				let content = content_buff.join("\n\n");
-				json!(content)
-			};
-			Some(system)
+				// Now build the system multi part
+				let system: Value = if last_cache_idx > 0 {
+					let mut parts: Vec<Value> = Vec::new();
+					for (idx, (content, _)) in systems.iter().enumerate() {
+						let idx = idx as i32;
+						if idx == last_cache_idx {
+							let part = json!({"type": "text", "text": content, "cache_control": {"type": "ephemeral"}});
+							parts.push(part);
+						} else {
+							let part = json!({"type": "text", "text": content});
+							parts.push(part);
+						}
+					}
+					json!(parts)
+				} else {
+					let content_buff = systems.iter().map(|(content, _)| content.as_str()).collect::<Vec<&str>>();
+					// we add empty line in between each system
+					let content = content_buff.join("\n\n");
+					json!(content)
+				};
+				Some(system)
+			}
 		} else {
 			None
 		};
