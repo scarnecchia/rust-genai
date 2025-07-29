@@ -127,20 +127,7 @@ impl Adapter for AnthropicAdapter {
 			payload.x_insert("/tools", tools)?;
 		}
 
-		// -- Add supported ChatOptions
-		if let Some(temperature) = options_set.temperature() {
-			payload.x_insert("temperature", temperature)?;
-		}
-
-		if !options_set.stop_sequences().is_empty() {
-			payload.x_insert("stop_sequences", options_set.stop_sequences())?;
-		}
-
-		//const MAX_TOKENS_64K: u32 = 64000; // claude-sonnet-4, claude-3-7-sonnet,
-		// custom
-		// const MAX_TOKENS_32K: u32 = 32000; // claude-opus-4
-		// const MAX_TOKENS_8K: u32 = 8192; // claude-3-5-sonnet, claude-3-5-haiku
-		// const MAX_TOKENS_4K: u32 = 4096; // claude-3-opus, claude-3-haiku
+		// -- Calculate max_tokens first (required for Anthropic)
 		let max_tokens = options_set.max_tokens().unwrap_or_else(|| {
 			// most likely models used, so put first. Also a little wider with `claude-sonnet` (since name from version 4)
 			if model_name.contains("claude-sonnet") || model_name.contains("claude-3-7-sonnet") {
@@ -159,27 +146,25 @@ impl Adapter for AnthropicAdapter {
 		});
 		payload.x_insert("max_tokens", max_tokens)?; // required for Anthropic
 
-		if let Some(top_p) = options_set.top_p() {
-			payload.x_insert("top_p", top_p)?;
-		}
-
-		// -- Add extended thinking support for compatible models
-		// Supported: claude-opus-4, claude-sonnet-4, claude-3-7-sonnet
+		// -- Check if model supports thinking and if it should be enabled
 		let supports_thinking = model_name.contains("claude-opus-4")
 			|| model_name.contains("claude-sonnet-4")
 			|| model_name.contains("claude-3-7-sonnet");
 
-		if supports_thinking {
+		let mut thinking_enabled = false;
+		if supports_thinking && options_set.capture_reasoning_content().unwrap_or(false) {
 			// Convert reasoning effort to budget tokens
 			let budget_tokens = match options_set.reasoning_effort() {
 				Some(ReasoningEffort::Low) => 4096,     // 4k tokens
 				Some(ReasoningEffort::Medium) => 16384, // 16k tokens (recommended starting point)
 				Some(ReasoningEffort::High) => 32768,   // 32k tokens
 				Some(ReasoningEffort::Budget(b)) => *b as u32,
-				None => 0,
+				None => 16384, // Default to medium if reasoning content capture is enabled
 			};
 
 			if budget_tokens > 0 {
+				thinking_enabled = true;
+				
 				// Ensure budget is at least 1024 (Anthropic minimum)
 				let budget_tokens = budget_tokens.max(1024);
 
@@ -191,6 +176,32 @@ impl Adapter for AnthropicAdapter {
 					"budget_tokens": budget_tokens
 				});
 				payload.x_insert("thinking", thinking)?;
+			}
+		}
+
+		// -- Add other supported ChatOptions
+		// Temperature cannot be set when thinking is enabled
+		if !thinking_enabled {
+			if let Some(temperature) = options_set.temperature() {
+				payload.x_insert("temperature", temperature)?;
+			}
+		}
+
+		if !options_set.stop_sequences().is_empty() {
+			payload.x_insert("stop_sequences", options_set.stop_sequences())?;
+		}
+
+		// top_p restrictions when thinking is enabled
+		if let Some(top_p) = options_set.top_p() {
+			if thinking_enabled {
+				// When thinking is enabled, top_p must be between 0.95 and 1
+				if top_p >= 0.95 && top_p <= 1.0 {
+					payload.x_insert("top_p", top_p)?;
+				}
+				// Otherwise skip setting top_p
+			} else {
+				// Normal top_p when thinking is disabled
+				payload.x_insert("top_p", top_p)?;
 			}
 		}
 
