@@ -3,7 +3,7 @@ use crate::adapter::anthropic::AnthropicStreamer;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{
 	ChatOptionsSet, ChatRequest, ChatResponse, ChatRole, ChatStream, ChatStreamResponse, ContentPart, ImageSource,
-	MessageContent, PromptTokensDetails, ToolCall, Usage,
+	MessageContent, PromptTokensDetails, ReasoningEffort, ToolCall, Usage,
 };
 use crate::resolver::{AuthData, Endpoint};
 use crate::webc::WebResponse;
@@ -163,6 +163,37 @@ impl Adapter for AnthropicAdapter {
 			payload.x_insert("top_p", top_p)?;
 		}
 
+		// -- Add extended thinking support for compatible models
+		// Supported: claude-opus-4, claude-sonnet-4, claude-3-7-sonnet
+		let supports_thinking = model_name.contains("claude-opus-4")
+			|| model_name.contains("claude-sonnet-4")
+			|| model_name.contains("claude-3-7-sonnet");
+
+		if supports_thinking {
+			// Convert reasoning effort to budget tokens
+			let budget_tokens = match options_set.reasoning_effort() {
+				Some(ReasoningEffort::Low) => 4096,     // 4k tokens
+				Some(ReasoningEffort::Medium) => 16384, // 16k tokens (recommended starting point)
+				Some(ReasoningEffort::High) => 32768,   // 32k tokens
+				Some(ReasoningEffort::Budget(b)) => *b as u32,
+				None => 0,
+			};
+
+			if budget_tokens > 0 {
+				// Ensure budget is at least 1024 (Anthropic minimum)
+				let budget_tokens = budget_tokens.max(1024);
+
+				// Ensure budget is less than max_tokens
+				let budget_tokens = budget_tokens.min(max_tokens.saturating_sub(100));
+
+				let thinking = json!({
+					"type": "enabled",
+					"budget_tokens": budget_tokens
+				});
+				payload.x_insert("thinking", thinking)?;
+			}
+		}
+
 		Ok(WebRequestData { url, headers, payload })
 	}
 
@@ -194,11 +225,20 @@ impl Adapter for AnthropicAdapter {
 		let mut text_content: Vec<String> = Vec::new();
 		// Note: here tool_calls is probably the exception, so not creating the vector if not needed
 		let mut tool_calls: Vec<ToolCall> = vec![];
+		let mut thinking_content: Option<String> = None;
 
 		for mut item in json_content_items {
 			let typ: &str = item.x_get_as("type")?;
 			if typ == "text" {
 				text_content.push(item.x_take("text")?);
+			} else if typ == "thinking" {
+				// Capture thinking content if available
+				if let Ok(thinking_text) = item.x_take::<String>("text") {
+					match thinking_content {
+						Some(ref mut content) => content.push_str(&thinking_text),
+						None => thinking_content = Some(thinking_text),
+					}
+				}
 			} else if typ == "tool_use" {
 				let call_id = item.x_take::<String>("id")?;
 				let fn_name = item.x_take::<String>("name")?;
@@ -223,7 +263,7 @@ impl Adapter for AnthropicAdapter {
 
 		Ok(ChatResponse {
 			content,
-			reasoning_content: None,
+			reasoning_content: thinking_content,
 			model_iden,
 			provider_model_iden,
 			usage,
@@ -439,13 +479,13 @@ impl AnthropicAdapter {
 			if is_oauth {
 				// Build array format for OAuth
 				let mut parts: Vec<Value> = Vec::new();
-				
+
 				// OAuth requires Claude Code identification as first system prompt
 				parts.push(json!({
 					"type": "text",
 					"text": "You are Claude Code, Anthropic's official CLI for Claude."
 				}));
-				
+
 				// Add user's system prompts, clarifying they override Claude Code identity
 				for (idx, (content, is_cache_control)) in systems.iter().enumerate() {
 					let text = if idx == 0 {
@@ -454,7 +494,7 @@ impl AnthropicAdapter {
 					} else {
 						content.clone()
 					};
-					
+
 					let mut part = json!({"type": "text", "text": text});
 					// Apply cache control if specified
 					if *is_cache_control {
