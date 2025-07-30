@@ -24,6 +24,7 @@ enum InProgressBlock {
 	Text,
 	ToolUse { id: String, name: String, input: String },
 	Thinking,
+	RedactedThinking { _data: String },
 }
 
 impl AnthropicStreamer {
@@ -72,6 +73,14 @@ impl futures::Stream for AnthropicStreamer {
 							match data.x_get_str("/content_block/type") {
 								Ok("text") => self.in_progress_block = InProgressBlock::Text,
 								Ok("thinking") => self.in_progress_block = InProgressBlock::Thinking,
+								Ok("redacted_thinking") => {
+									if let Ok(data_str) = data.x_take::<String>("/content_block/data") {
+										self.in_progress_block = InProgressBlock::RedactedThinking { _data: data_str };
+									} else {
+										// If we can't get the data, treat it as unknown
+										tracing::warn!("redacted_thinking block missing data field");
+									}
+								}
 								Ok("tool_use") => {
 									self.in_progress_block = InProgressBlock::ToolUse {
 										id: data.x_take("/content_block/id")?,
@@ -126,6 +135,10 @@ impl futures::Stream for AnthropicStreamer {
 									}
 
 									return Poll::Ready(Some(Ok(InterStreamEvent::ReasoningChunk(thinking))));
+								}
+								InProgressBlock::RedactedThinking { .. } => {
+									// Redacted thinking blocks don't have delta content, just skip
+									continue;
 								}
 							}
 						}

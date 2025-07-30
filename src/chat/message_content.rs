@@ -1,6 +1,7 @@
 use crate::chat::{ToolCall, ToolResponse};
 use derive_more::derive::From;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 
 /// Note: MessageContent is use for the ChatRequest as well as the ChatResponse
@@ -20,6 +21,9 @@ pub enum MessageContent {
 	/// Tool call responses
 	#[from]
 	ToolResponses(Vec<ToolResponse>),
+
+	/// Content blocks - for providers that need exact block sequence preservation (e.g. Anthropic with thinking)
+	Blocks(Vec<ContentBlock>),
 }
 
 /// Constructors
@@ -52,6 +56,7 @@ impl MessageContent {
 			MessageContent::Parts(_) => None,
 			MessageContent::ToolCalls(_) => None,
 			MessageContent::ToolResponses(_) => None,
+			MessageContent::Blocks(_) => None,
 		}
 	}
 
@@ -65,6 +70,7 @@ impl MessageContent {
 			MessageContent::Parts(_) => None,
 			MessageContent::ToolCalls(_) => None,
 			MessageContent::ToolResponses(_) => None,
+			MessageContent::Blocks(_) => None,
 		}
 	}
 
@@ -89,6 +95,7 @@ impl MessageContent {
 			MessageContent::Parts(parts) => parts.is_empty(),
 			MessageContent::ToolCalls(tool_calls) => tool_calls.is_empty(),
 			MessageContent::ToolResponses(tool_responses) => tool_responses.is_empty(),
+			MessageContent::Blocks(blocks) => blocks.is_empty(),
 		}
 	}
 }
@@ -113,6 +120,21 @@ impl From<Vec<ContentPart>> for MessageContent {
 pub enum ContentPart {
 	Text(String),
 	Image { content_type: String, source: ImageSource },
+}
+
+/// Content blocks for providers that need exact sequence preservation (e.g. Anthropic with thinking)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ContentBlock {
+	/// Text content
+	Text { text: String },
+	/// Thinking content (Anthropic)
+	Thinking { text: String, signature: Option<String> },
+	/// Redacted thinking content (Anthropic) - encrypted/hidden thinking
+	RedactedThinking { data: String },
+	/// Tool use request
+	ToolUse { id: String, name: String, input: Value },
+	/// Tool result response
+	ToolResult { tool_use_id: String, content: String },
 }
 
 /// Constructors

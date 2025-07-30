@@ -2,8 +2,8 @@ use crate::adapter::adapters::support::get_api_key;
 use crate::adapter::anthropic::AnthropicStreamer;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{
-	ChatOptionsSet, ChatRequest, ChatResponse, ChatRole, ChatStream, ChatStreamResponse, ContentPart, ImageSource,
-	MessageContent, PromptTokensDetails, ReasoningEffort, ToolCall, Usage,
+	ChatOptionsSet, ChatRequest, ChatResponse, ChatRole, ChatStream, ChatStreamResponse, ContentBlock, ContentPart,
+	ImageSource, MessageContent, PromptTokensDetails, ReasoningEffort, ToolCall, Usage,
 };
 use crate::resolver::{AuthData, Endpoint};
 use crate::webc::WebResponse;
@@ -103,15 +103,32 @@ impl Adapter for AnthropicAdapter {
 			])
 		};
 
+		// -- Calculate thinking_enabled early to pass to message formatting
+		let (model_name, _) = model.model_name.as_model_name_and_namespace();
+		let supports_thinking = model_name.contains("claude-opus-4")
+			|| model_name.contains("claude-sonnet-4")
+			|| model_name.contains("claude-3-7-sonnet");
+
+		let thinking_enabled = if supports_thinking {
+			match options_set.reasoning_effort() {
+				Some(ReasoningEffort::Low) => true,
+				Some(ReasoningEffort::Medium) => true,
+				Some(ReasoningEffort::High) => true,
+				Some(ReasoningEffort::Budget(b)) => *b > 0,
+				None => false,
+			}
+		} else {
+			false
+		};
+
 		// -- Parts
 		let AnthropicRequestParts {
 			system,
 			messages,
 			tools,
-		} = Self::into_anthropic_request_parts(chat_req, is_oauth)?;
+		} = Self::into_anthropic_request_parts(chat_req, is_oauth, thinking_enabled)?;
 
 		// -- Build the basic payload
-		let (model_name, _) = model.model_name.as_model_name_and_namespace();
 		let stream = matches!(service_type, ServiceType::ChatStream);
 		let mut payload = json!({
 			"model": model_name.to_string(),
@@ -146,37 +163,28 @@ impl Adapter for AnthropicAdapter {
 		});
 		payload.x_insert("max_tokens", max_tokens)?; // required for Anthropic
 
-		// -- Check if model supports thinking and if it should be enabled
-		let supports_thinking = model_name.contains("claude-opus-4")
-			|| model_name.contains("claude-sonnet-4")
-			|| model_name.contains("claude-3-7-sonnet");
-
-		let mut thinking_enabled = false;
-		if supports_thinking && options_set.capture_reasoning_content().unwrap_or(false) {
+		// -- Add thinking configuration if enabled
+		if thinking_enabled {
 			// Convert reasoning effort to budget tokens
 			let budget_tokens = match options_set.reasoning_effort() {
 				Some(ReasoningEffort::Low) => 4096,     // 4k tokens
 				Some(ReasoningEffort::Medium) => 16384, // 16k tokens (recommended starting point)
 				Some(ReasoningEffort::High) => 32768,   // 32k tokens
 				Some(ReasoningEffort::Budget(b)) => *b as u32,
-				None => 16384, // Default to medium if reasoning content capture is enabled
+				None => 16384, // Default to medium if thinking is enabled
 			};
 
-			if budget_tokens > 0 {
-				thinking_enabled = true;
-				
-				// Ensure budget is at least 1024 (Anthropic minimum)
-				let budget_tokens = budget_tokens.max(1024);
+			// Ensure budget is at least 1024 (Anthropic minimum)
+			let budget_tokens = budget_tokens.max(1024);
 
-				// Ensure budget is less than max_tokens
-				let budget_tokens = budget_tokens.min(max_tokens.saturating_sub(100));
+			// Ensure budget is less than max_tokens
+			let budget_tokens = budget_tokens.min(max_tokens.saturating_sub(100));
 
-				let thinking = json!({
-					"type": "enabled",
-					"budget_tokens": budget_tokens
-				});
-				payload.x_insert("thinking", thinking)?;
-			}
+			let thinking = json!({
+				"type": "enabled",
+				"budget_tokens": budget_tokens
+			});
+			payload.x_insert("thinking", thinking)?;
 		}
 
 		// -- Add other supported ChatOptions
@@ -228,58 +236,107 @@ impl Adapter for AnthropicAdapter {
 		// -- Capture the content
 		let mut content: Vec<MessageContent> = Vec::new();
 
-		// NOTE: Here we are going to concatenate all of the Anthropic text content items into one
-		//       genai MessageContent::Text. This is more in line with the OpenAI API style,
-		//       but loses the fact that they were originally separate items.
+		// -- Process content items
 		let json_content_items: Vec<Value> = body.x_take("content")?;
 
-		let mut text_content: Vec<String> = Vec::new();
-		// Note: here tool_calls is probably the exception, so not creating the vector if not needed
-		let mut tool_calls: Vec<ToolCall> = vec![];
-		let mut thinking_content: Option<String> = None;
+		// Check if we have thinking blocks mixed with other content
+		let has_thinking_blocks = json_content_items.iter().any(|item| {
+			matches!(
+				item.get("type").and_then(|v| v.as_str()),
+				Some("thinking" | "redacted_thinking")
+			)
+		});
 
-		for mut item in json_content_items {
-			let typ: &str = item.x_get_as("type")?;
-			if typ == "text" {
-				text_content.push(item.x_take("text")?);
-			} else if typ == "thinking" {
-				// Capture thinking content if available
-				if let Ok(thinking_text) = item.x_take::<String>("text") {
-					match thinking_content {
-						Some(ref mut content) => content.push_str(&thinking_text),
-						None => thinking_content = Some(thinking_text),
+		if has_thinking_blocks {
+			// When thinking blocks are present, preserve exact block sequence
+			let mut blocks: Vec<ContentBlock> = Vec::new();
+			let mut reasoning_content = String::new();
+
+			for mut item in json_content_items {
+				let typ: &str = item.x_get_as("type")?;
+				match typ {
+					"text" => {
+						let text = item.x_take("text")?;
+						blocks.push(ContentBlock::Text { text });
+					}
+					"thinking" => {
+						// Thinking blocks might have "thinking" field instead of "text"
+						let text: String = item.x_take("thinking").or_else(|_| item.x_take("text"))?;
+						let signature = item.x_take("signature").ok();
+						reasoning_content.push_str(&text);
+						reasoning_content.push('\n');
+						blocks.push(ContentBlock::Thinking { text, signature });
+					}
+					"redacted_thinking" => {
+						let data = item.x_take("data")?;
+						blocks.push(ContentBlock::RedactedThinking { data });
+					}
+					"tool_use" => {
+						let id = item.x_take("id")?;
+						let name = item.x_take("name")?;
+						let input = item.x_take("input").unwrap_or_default();
+						blocks.push(ContentBlock::ToolUse { id, name, input });
+					}
+					_ => {
+						// Skip unknown block types
+						warn!("Unknown content block type in Anthropic response: {}", typ);
 					}
 				}
-			} else if typ == "tool_use" {
-				let call_id = item.x_take::<String>("id")?;
-				let fn_name = item.x_take::<String>("name")?;
-				// if not found, will be Value::Null
-				let fn_arguments = item.x_take::<Value>("input").unwrap_or_default();
-				let tool_call = ToolCall {
-					call_id,
-					fn_name,
-					fn_arguments,
-				};
-				tool_calls.push(tool_call);
 			}
-		}
 
-		if !tool_calls.is_empty() {
-			content.push(MessageContent::from(tool_calls))
-		}
+			content.push(MessageContent::Blocks(blocks));
 
-		if !text_content.is_empty() {
-			content.push(MessageContent::from(text_content.join("\n")))
-		}
+			Ok(ChatResponse {
+				content,
+				reasoning_content: if reasoning_content.is_empty() {
+					None
+				} else {
+					Some(reasoning_content.trim_end().to_string())
+				},
+				model_iden,
+				provider_model_iden,
+				usage,
+				captured_raw_body,
+			})
+		} else {
+			// No thinking blocks - use traditional parsing for backward compatibility
+			let mut text_content: Vec<String> = Vec::new();
+			let mut tool_calls: Vec<ToolCall> = vec![];
 
-		Ok(ChatResponse {
-			content,
-			reasoning_content: thinking_content,
-			model_iden,
-			provider_model_iden,
-			usage,
-			captured_raw_body,
-		})
+			for mut item in json_content_items {
+				let typ: &str = item.x_get_as("type")?;
+				if typ == "text" {
+					text_content.push(item.x_take("text")?);
+				} else if typ == "tool_use" {
+					let call_id = item.x_take::<String>("id")?;
+					let fn_name = item.x_take::<String>("name")?;
+					let fn_arguments = item.x_take::<Value>("input").unwrap_or_default();
+					let tool_call = ToolCall {
+						call_id,
+						fn_name,
+						fn_arguments,
+					};
+					tool_calls.push(tool_call);
+				}
+			}
+
+			if !tool_calls.is_empty() {
+				content.push(MessageContent::from(tool_calls))
+			}
+
+			if !text_content.is_empty() {
+				content.push(MessageContent::from(text_content.join("\n")))
+			}
+
+			Ok(ChatResponse {
+				content,
+				reasoning_content: None,
+				model_iden,
+				provider_model_iden,
+				usage,
+				captured_raw_body,
+			})
+		}
 	}
 
 	fn to_chat_stream(
@@ -363,7 +420,12 @@ impl AnthropicAdapter {
 	/// Takes the GenAI ChatMessages and constructs the System string and JSON Messages for Anthropic.
 	/// - Will push the `ChatRequest.system` and system message to `AnthropicRequestParts.system`
 	/// - When is_oauth is true, forces array format for system prompts
-	fn into_anthropic_request_parts(chat_req: ChatRequest, is_oauth: bool) -> Result<AnthropicRequestParts> {
+	/// - When thinking_enabled is true, adds thinking blocks to assistant messages before tool calls
+	fn into_anthropic_request_parts(
+		chat_req: ChatRequest,
+		is_oauth: bool,
+		_thinking_enabled: bool,
+	) -> Result<AnthropicRequestParts> {
 		let mut messages: Vec<Value> = Vec::new();
 		// (content, is_cache_control)
 		let mut systems: Vec<(String, bool)> = Vec::new();
@@ -418,6 +480,40 @@ impl AnthropicAdapter {
 
 							json!(values)
 						}
+						MessageContent::Blocks(blocks) => {
+							// Convert ContentBlocks to Anthropic format
+							let values = blocks
+								.into_iter()
+								.map(|block| match block {
+									ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+									ContentBlock::Thinking { text, signature } => {
+										let mut obj = json!({"type": "thinking", "thinking": text});
+										if let Some(sig) = signature {
+											obj["signature"] = json!(sig);
+										}
+										obj
+									}
+									ContentBlock::RedactedThinking { data } => json!({
+										"type": "redacted_thinking",
+										"data": data,
+									}),
+									ContentBlock::ToolUse { id, name, input } => json!({
+										"type": "tool_use",
+										"id": id,
+										"name": name,
+										"input": input,
+									}),
+									ContentBlock::ToolResult { tool_use_id, content } => json!({
+										"type": "tool_result",
+										"tool_use_id": tool_use_id,
+										"content": content,
+									}),
+								})
+								.collect::<Vec<Value>>();
+
+							let values = apply_cache_control_to_parts(is_cache_control, values);
+							json!(values)
+						}
 						// Use `match` instead of `if let`. This will allow to future-proof this
 						// implementation in case some new message content types would appear,
 						// this way the library would not compile if not all methods are implemented
@@ -452,6 +548,43 @@ impl AnthropicAdapter {
 							messages.push(json! ({
 								"role": "assistant",
 								"content": tool_calls
+							}));
+						}
+						MessageContent::Blocks(blocks) => {
+							// For assistant messages with blocks, convert directly
+							let values = blocks
+								.into_iter()
+								.map(|block| match block {
+									ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+									ContentBlock::Thinking { text, signature } => {
+										let mut obj = json!({"type": "thinking", "thinking": text});
+										if let Some(sig) = signature {
+											obj["signature"] = json!(sig);
+										}
+										obj
+									}
+									ContentBlock::RedactedThinking { data } => json!({
+										"type": "redacted_thinking",
+										"data": data,
+									}),
+									ContentBlock::ToolUse { id, name, input } => json!({
+										"type": "tool_use",
+										"id": id,
+										"name": name,
+										"input": input,
+									}),
+									ContentBlock::ToolResult { tool_use_id, content } => json!({
+										"type": "tool_result",
+										"tool_use_id": tool_use_id,
+										"content": content,
+									}),
+								})
+								.collect::<Vec<Value>>();
+
+							let values = apply_cache_control_to_parts(is_cache_control, values);
+							messages.push(json! ({
+								"role": "assistant",
+								"content": values
 							}));
 						}
 						// TODO: Probably need to trace/warn that this will be ignored

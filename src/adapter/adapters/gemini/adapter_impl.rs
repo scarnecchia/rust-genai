@@ -469,6 +469,7 @@ impl GeminiAdapter {
 									.collect::<Vec<Value>>()
 							)
 						}
+						MessageContent::Blocks(_) => continue, // Gemini doesn't support blocks
 					};
 
 					contents.push(json!({"role": "user", "parts": content}));

@@ -398,6 +398,7 @@ impl OpenAIAdapter {
 						// TODO: Probably need to warn if it is a ToolCalls type of content
 						MessageContent::ToolCalls(_) => continue,
 						MessageContent::ToolResponses(_) => continue,
+						MessageContent::Blocks(_) => continue, // OpenAI doesn't support blocks
 					};
 					messages.push(json! ({"role": "user", "content": content}));
 				}
@@ -423,6 +424,7 @@ impl OpenAIAdapter {
 					// TODO: Probably need to trace/warn that this will be ignored
 					MessageContent::Parts(_) => (),
 					MessageContent::ToolResponses(_) => (),
+					MessageContent::Blocks(_) => (), // OpenAI doesn't support blocks
 				},
 
 				ChatRole::Tool => {
