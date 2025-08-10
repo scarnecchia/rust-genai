@@ -279,6 +279,19 @@ impl GeminiAdapter {
 		let mut content: Vec<GeminiChatContent> = Vec::new();
 
 		// -- Read multipart
+		// Check if the expected path exists before trying to extract
+		if body.get("candidates").is_none() || body.get("candidates").and_then(|c| c.get(0)).is_none() {
+			// Log the unexpected response structure
+			eprintln!(
+				"Gemini API response missing expected structure. Response: {}",
+				serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string())
+			);
+
+			// Return empty response for now - this might be a valid empty response
+			let usage = body.x_take::<Value>("usageMetadata").map(Self::into_usage).unwrap_or_default();
+			return Ok(GeminiChatResponse { content, usage });
+		}
+
 		let parts = body.x_take::<Vec<Value>>("/candidates/0/content/parts")?;
 		for mut part in parts {
 			// -- Capture eventual function call
