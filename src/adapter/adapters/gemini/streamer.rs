@@ -87,20 +87,41 @@ impl futures::Stream for GeminiStreamer {
 
 							let GeminiChatResponse { content, usage } = gemini_response;
 
-							// -- Extract text and toolcall
+							// -- Extract text, thinking, and toolcall
 							// WARNING: Assume that only ONE tool call per message (or take the last one)
 							let mut stream_text_content: String = String::new();
+							let mut stream_reasoning_content: String = String::new();
 							let mut stream_tool_call: Option<ToolCall> = None;
 							for g_content_item in content {
 								match g_content_item {
 									GeminiChatContent::Text(text) => stream_text_content.push_str(&text),
+									GeminiChatContent::Thinking { text, .. } => {
+										stream_reasoning_content.push_str(&text)
+									}
 									GeminiChatContent::ToolCall(tool_call) => stream_tool_call = Some(tool_call),
 								}
 							}
 
 							// -- Send Event
-							// WARNING: Assume only text or toolcall (not both on the same event)
-							if !stream_text_content.is_empty() {
+							// WARNING: Assume only text, reasoning, or toolcall (not multiple on the same event)
+							if !stream_reasoning_content.is_empty() {
+								// Capture reasoning content
+								if self.options.capture_reasoning_content {
+									match self.captured_data.reasoning_content {
+										Some(ref mut c) => c.push_str(&stream_reasoning_content),
+										None => {
+											self.captured_data.reasoning_content =
+												Some(stream_reasoning_content.clone())
+										}
+									}
+								}
+
+								if self.options.capture_usage {
+									self.captured_data.usage = Some(usage);
+								}
+
+								InterStreamEvent::ReasoningChunk(stream_reasoning_content)
+							} else if !stream_text_content.is_empty() {
 								// Capture content
 								if self.options.capture_content {
 									match self.captured_data.content {

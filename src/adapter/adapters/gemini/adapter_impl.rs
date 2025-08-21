@@ -3,8 +3,8 @@ use crate::adapter::gemini::GeminiStreamer;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{
 	ChatOptionsSet, ChatRequest, ChatResponse, ChatResponseFormat, ChatRole, ChatStream, ChatStreamResponse,
-	CompletionTokensDetails, ContentPart, ImageSource, MessageContent, PromptTokensDetails, ReasoningEffort, ToolCall,
-	Usage,
+	CompletionTokensDetails, ContentBlock, ContentPart, ImageSource, MessageContent, PromptTokensDetails,
+	ReasoningEffort, ToolCall, Usage,
 };
 use crate::resolver::{AuthData, Endpoint};
 use crate::webc::{WebResponse, WebStream};
@@ -128,6 +128,8 @@ impl Adapter for GeminiAdapter {
 		// -- Set the reasoning effort
 		if let Some(ReasoningEffort::Budget(budget)) = reasoning_effort {
 			payload.x_insert("/generationConfig/thinkingConfig/thinkingBudget", budget)?;
+			// Include thoughts in the response when thinking is enabled
+			payload.x_insert("/generationConfig/thinkingConfig/includeThoughts", true)?;
 		}
 
 		// Note: It's unclear from the spec if the content of systemInstruction should have a role.
@@ -206,28 +208,79 @@ impl Adapter for GeminiAdapter {
 			usage,
 		} = gemini_response;
 
-		// FIXME: Needs to take the content list
-		let mut tool_calls: Vec<ToolCall> = Default::default();
-		let mut content: Vec<MessageContent> = Default::default();
-		// let mut text_content:
-		for g_item in gemini_content {
-			match g_item {
-				GeminiChatContent::Text(text) => content.push(MessageContent::from_text(text)),
-				GeminiChatContent::ToolCall(tool_call) => tool_calls.push(tool_call),
-			}
-		}
-		if !tool_calls.is_empty() {
-			content.push(MessageContent::ToolCalls(tool_calls))
-		}
+		// Check if we have thinking blocks
+		let has_thinking = gemini_content
+			.iter()
+			.any(|item| matches!(item, GeminiChatContent::Thinking { .. }));
 
-		Ok(ChatResponse {
-			content,
-			reasoning_content: None,
-			model_iden,
-			provider_model_iden,
-			usage,
-			captured_raw_body,
-		})
+		if has_thinking {
+			// When we have thinking blocks, preserve them as blocks
+			let mut blocks: Vec<ContentBlock> = Vec::new();
+			let mut reasoning_content = String::new();
+
+			for g_item in gemini_content {
+				match g_item {
+					GeminiChatContent::Text(text) => {
+						blocks.push(ContentBlock::Text {
+							text,
+							thought_signature: None,
+						});
+					}
+					GeminiChatContent::Thinking { text, signature } => {
+						reasoning_content.push_str(&text);
+						reasoning_content.push('\n');
+						blocks.push(ContentBlock::Thinking { text, signature });
+					}
+					GeminiChatContent::ToolCall(tool_call) => {
+						blocks.push(ContentBlock::ToolUse {
+							id: tool_call.call_id.clone(),
+							name: tool_call.fn_name,
+							input: tool_call.fn_arguments,
+							thought_signature: None,
+						});
+					}
+				}
+			}
+
+			Ok(ChatResponse {
+				content: vec![MessageContent::Blocks(blocks)],
+				reasoning_content: if reasoning_content.is_empty() {
+					None
+				} else {
+					Some(reasoning_content)
+				},
+				model_iden,
+				provider_model_iden,
+				usage,
+				captured_raw_body,
+			})
+		} else {
+			// No thinking blocks, use simple format
+			let mut tool_calls: Vec<ToolCall> = Default::default();
+			let mut content: Vec<MessageContent> = Default::default();
+
+			for g_item in gemini_content {
+				match g_item {
+					GeminiChatContent::Text(text) => content.push(MessageContent::from_text(text)),
+					GeminiChatContent::ToolCall(tool_call) => tool_calls.push(tool_call),
+					GeminiChatContent::Thinking { .. } => {
+						// Should not happen if has_thinking is false
+					}
+				}
+			}
+			if !tool_calls.is_empty() {
+				content.push(MessageContent::ToolCalls(tool_calls))
+			}
+
+			Ok(ChatResponse {
+				content,
+				reasoning_content: None,
+				model_iden,
+				provider_model_iden,
+				usage,
+				captured_raw_body,
+			})
+		}
 	}
 
 	fn to_chat_stream(
@@ -294,6 +347,15 @@ impl GeminiAdapter {
 
 		let parts = body.x_take::<Vec<Value>>("/candidates/0/content/parts")?;
 		for mut part in parts {
+			// Check if this part has a thought signature (can be on any part)
+			let thought_signature = part
+				.x_take::<String>("thoughtSignature")
+				.ok()
+				.map(|sig| format!("gemini:{}", sig)); // Prefix with vendor
+
+			// Check if this is a thought part
+			let is_thought = part.x_get::<bool>("thought").unwrap_or(false);
+
 			// -- Capture eventual function call
 			if let Ok(fn_call_value) = part.x_take::<Value>("functionCall") {
 				let tool_call = ToolCall {
@@ -305,14 +367,20 @@ impl GeminiAdapter {
 				content.push(GeminiChatContent::ToolCall(tool_call))
 			}
 
-			// -- Capture eventual text
-			if let Some(txt_content) = part
+			// -- Capture eventual text (including thoughts)
+			if let Some(text) = part
 				.x_take::<Value>("text")
 				.ok()
 				.and_then(|v| if let Value::String(v) = v { Some(v) } else { None })
-				.map(GeminiChatContent::Text)
 			{
-				content.push(txt_content)
+				if is_thought {
+					content.push(GeminiChatContent::Thinking {
+						text,
+						signature: thought_signature,
+					})
+				} else {
+					content.push(GeminiChatContent::Text(text))
+				}
 			}
 		}
 		let usage = body.x_take::<Value>("usageMetadata").map(Self::into_usage).unwrap_or_default();
@@ -482,7 +550,91 @@ impl GeminiAdapter {
 									.collect::<Vec<Value>>()
 							)
 						}
-						MessageContent::Blocks(_) => continue, // Gemini doesn't support blocks
+						MessageContent::Blocks(blocks) => {
+							// Convert blocks to Gemini parts format
+							json!(
+								blocks
+									.into_iter()
+									.filter_map(|block| match block {
+										ContentBlock::Text {
+											text,
+											thought_signature,
+										} => {
+											let mut part = json!({"text": text});
+											// Only include gemini signatures
+											if let Some(sig) = thought_signature {
+												if sig.starts_with("gemini:") {
+													part["thoughtSignature"] =
+														json!(sig.strip_prefix("gemini:").unwrap_or(&sig));
+												}
+											}
+											Some(part)
+										}
+										ContentBlock::Thinking { text, signature } => {
+											let mut part = json!({"text": text, "thought": true});
+											// Only include gemini signatures
+											if let Some(sig) = signature {
+												if sig.starts_with("gemini:") {
+													part["thoughtSignature"] =
+														json!(sig.strip_prefix("gemini:").unwrap_or(&sig));
+												}
+											}
+											Some(part)
+										}
+										ContentBlock::ToolUse {
+											id: _,
+											name,
+											input,
+											thought_signature,
+										} => {
+											let mut part = json!({
+												"functionCall": {
+													"name": name,
+													"args": input,
+												}
+											});
+											// Only include gemini signatures
+											if let Some(sig) = thought_signature {
+												if sig.starts_with("gemini:") {
+													part["thoughtSignature"] =
+														json!(sig.strip_prefix("gemini:").unwrap_or(&sig));
+												}
+											}
+											Some(part)
+										}
+										ContentBlock::ToolResult {
+											tool_use_id,
+											content,
+											is_error,
+											thought_signature,
+										} => {
+											let mut response_obj = json!({
+												"name": tool_use_id,
+												"content": content,
+											});
+											if let Some(true) = is_error {
+												response_obj["is_error"] = json!(true);
+											}
+											let mut part = json!({
+												"functionResponse": {
+													"name": tool_use_id,
+													"response": response_obj,
+												}
+											});
+											// Only include gemini signatures
+											if let Some(sig) = thought_signature {
+												if sig.starts_with("gemini:") {
+													part["thoughtSignature"] =
+														json!(sig.strip_prefix("gemini:").unwrap_or(&sig));
+												}
+											}
+											Some(part)
+										}
+										_ => None, // Skip other block types like RedactedThinking
+									})
+									.collect::<Vec<Value>>()
+							)
+						}
 					};
 
 					contents.push(json!({"role": "user", "parts": content}));
@@ -506,6 +658,65 @@ impl GeminiAdapter {
 								})
 								.collect::<Vec<Value>>()
 						})),
+						MessageContent::Blocks(blocks) => {
+							// Convert blocks to Gemini parts format
+							let parts = blocks
+								.into_iter()
+								.filter_map(|block| match block {
+									ContentBlock::Text {
+										text,
+										thought_signature,
+									} => {
+										let mut part = json!({"text": text});
+										// Only include gemini signatures
+										if let Some(sig) = thought_signature {
+											if sig.starts_with("gemini:") {
+												part["thoughtSignature"] =
+													json!(sig.strip_prefix("gemini:").unwrap_or(&sig));
+											}
+										}
+										Some(part)
+									}
+									ContentBlock::Thinking { text, signature } => {
+										let mut part = json!({"text": text, "thought": true});
+										// Only include gemini signatures
+										if let Some(sig) = signature {
+											if sig.starts_with("gemini:") {
+												part["thoughtSignature"] =
+													json!(sig.strip_prefix("gemini:").unwrap_or(&sig));
+											}
+										}
+										Some(part)
+									}
+									ContentBlock::ToolUse {
+										id: _,
+										name,
+										input,
+										thought_signature,
+									} => {
+										let mut part = json!({
+											"functionCall": {
+												"name": name,
+												"args": input,
+											}
+										});
+										// Only include gemini signatures
+										if let Some(sig) = thought_signature {
+											if sig.starts_with("gemini:") {
+												part["thoughtSignature"] =
+													json!(sig.strip_prefix("gemini:").unwrap_or(&sig));
+											}
+										}
+										Some(part)
+									}
+									_ => None, // Skip other block types
+								})
+								.collect::<Vec<Value>>();
+
+							if !parts.is_empty() {
+								contents.push(json!({"role": "model", "parts": parts}));
+							}
+						}
 						_ => {
 							return Err(Error::MessageContentTypeNotSupported {
 								model_iden: model_iden.clone(),
@@ -619,6 +830,7 @@ pub(super) struct GeminiChatResponse {
 
 pub(super) enum GeminiChatContent {
 	Text(String),
+	Thinking { text: String, signature: Option<String> },
 	ToolCall(ToolCall),
 }
 

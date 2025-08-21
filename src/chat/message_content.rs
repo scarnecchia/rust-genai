@@ -126,15 +126,41 @@ pub enum ContentPart {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentBlock {
 	/// Text content
-	Text { text: String },
+	Text {
+		text: String,
+		/// Optional thought signature for Gemini-style thinking
+		#[serde(skip_serializing_if = "Option::is_none")]
+		thought_signature: Option<String>,
+	},
 	/// Thinking content (Anthropic)
-	Thinking { text: String, signature: Option<String> },
+	Thinking {
+		text: String,
+		/// Signature for maintaining context across turns
+		#[serde(skip_serializing_if = "Option::is_none")]
+		signature: Option<String>,
+	},
 	/// Redacted thinking content (Anthropic) - encrypted/hidden thinking
 	RedactedThinking { data: String },
 	/// Tool use request
-	ToolUse { id: String, name: String, input: Value },
+	ToolUse {
+		id: String,
+		name: String,
+		input: Value,
+		/// Optional thought signature for Gemini-style thinking
+		#[serde(skip_serializing_if = "Option::is_none")]
+		thought_signature: Option<String>,
+	},
 	/// Tool result response
-	ToolResult { tool_use_id: String, content: String },
+	ToolResult {
+		tool_use_id: String,
+		content: String,
+		/// Whether this tool result represents an error
+		#[serde(skip_serializing_if = "Option::is_none")]
+		is_error: Option<bool>,
+		/// Optional thought signature for Gemini-style thinking
+		#[serde(skip_serializing_if = "Option::is_none")]
+		thought_signature: Option<String>,
+	},
 }
 
 /// Constructors

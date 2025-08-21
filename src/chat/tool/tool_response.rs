@@ -5,6 +5,9 @@ pub struct ToolResponse {
 	pub call_id: String,
 	// For now, just a string (would probably be serialized JSON)
 	pub content: String,
+	/// Whether this tool response represents an error
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub is_error: Option<bool>,
 }
 
 /// Constructor
@@ -13,6 +16,7 @@ impl ToolResponse {
 		Self {
 			call_id: tool_call_id.into(),
 			content: content.into(),
+			is_error: None,
 		}
 	}
 }

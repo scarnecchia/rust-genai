@@ -257,7 +257,10 @@ impl Adapter for AnthropicAdapter {
 				match typ {
 					"text" => {
 						let text = item.x_take("text")?;
-						blocks.push(ContentBlock::Text { text });
+						blocks.push(ContentBlock::Text {
+							text,
+							thought_signature: None,
+						});
 					}
 					"thinking" => {
 						// Thinking blocks might have "thinking" field instead of "text"
@@ -275,7 +278,12 @@ impl Adapter for AnthropicAdapter {
 						let id = item.x_take("id")?;
 						let name = item.x_take("name")?;
 						let input = item.x_take("input").unwrap_or_default();
-						blocks.push(ContentBlock::ToolUse { id, name, input });
+						blocks.push(ContentBlock::ToolUse {
+							id,
+							name,
+							input,
+							thought_signature: None,
+						});
 					}
 					_ => {
 						// Skip unknown block types
@@ -485,7 +493,7 @@ impl AnthropicAdapter {
 							let values = blocks
 								.into_iter()
 								.map(|block| match block {
-									ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+									ContentBlock::Text { text, .. } => json!({"type": "text", "text": text}),
 									ContentBlock::Thinking { text, signature } => {
 										let mut obj = json!({"type": "thinking", "thinking": text});
 										if let Some(sig) = signature {
@@ -497,13 +505,15 @@ impl AnthropicAdapter {
 										"type": "redacted_thinking",
 										"data": data,
 									}),
-									ContentBlock::ToolUse { id, name, input } => json!({
+									ContentBlock::ToolUse { id, name, input, .. } => json!({
 										"type": "tool_use",
 										"id": id,
 										"name": name,
 										"input": input,
 									}),
-									ContentBlock::ToolResult { tool_use_id, content } => json!({
+									ContentBlock::ToolResult {
+										tool_use_id, content, ..
+									} => json!({
 										"type": "tool_result",
 										"tool_use_id": tool_use_id,
 										"content": content,
@@ -555,7 +565,7 @@ impl AnthropicAdapter {
 							let values = blocks
 								.into_iter()
 								.map(|block| match block {
-									ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+									ContentBlock::Text { text, .. } => json!({"type": "text", "text": text}),
 									ContentBlock::Thinking { text, signature } => {
 										let mut obj = json!({"type": "thinking", "thinking": text});
 										if let Some(sig) = signature {
@@ -567,13 +577,15 @@ impl AnthropicAdapter {
 										"type": "redacted_thinking",
 										"data": data,
 									}),
-									ContentBlock::ToolUse { id, name, input } => json!({
+									ContentBlock::ToolUse { id, name, input, .. } => json!({
 										"type": "tool_use",
 										"id": id,
 										"name": name,
 										"input": input,
 									}),
-									ContentBlock::ToolResult { tool_use_id, content } => json!({
+									ContentBlock::ToolResult {
+										tool_use_id, content, ..
+									} => json!({
 										"type": "tool_result",
 										"tool_use_id": tool_use_id,
 										"content": content,
