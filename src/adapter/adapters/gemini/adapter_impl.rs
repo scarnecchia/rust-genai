@@ -332,18 +332,34 @@ impl GeminiAdapter {
 		let mut content: Vec<GeminiChatContent> = Vec::new();
 
 		// -- Read multipart
-		// Check if the expected path exists before trying to extract
-		if body.get("candidates").is_none() || body.get("candidates").and_then(|c| c.get(0)).is_none() {
-			// Log the unexpected response structure
-			eprintln!(
-				"Gemini API response missing expected structure. Response: {}",
-				serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string())
-			);
+		// // Check if the expected path exists before trying to extract
+		// if body.get("candidates").is_none() || body.get("candidates").and_then(|c| c.get(0)).is_none() {
+		// 	// Check for specific reasons why candidates might be empty
+		// 	if let Some(prompt_feedback) = body.get("promptFeedback") {
+		// 		eprintln!(
+		// 			"Gemini API blocked prompt with feedback: {}",
+		// 			serde_json::to_string_pretty(prompt_feedback).unwrap_or_else(|_| prompt_feedback.to_string())
+		// 		);
+		// 	}
 
-			// Return empty response for now - this might be a valid empty response
-			let usage = body.x_take::<Value>("usageMetadata").map(Self::into_usage).unwrap_or_default();
-			return Ok(GeminiChatResponse { content, usage });
-		}
+		// 	// Check if candidates exists but is empty array vs missing entirely
+		// 	if let Some(candidates) = body.get("candidates") {
+		// 		if candidates.is_array() && candidates.as_array().map_or(false, |a| a.is_empty()) {
+		// 			eprintln!("Gemini API returned empty candidates array - likely safety filtered or prompt blocked");
+		// 		}
+		// 	} else {
+		// 		// This is the problematic case - no candidates at all, just usageMetadata
+		// 		// This is a known Gemini 2.5 Pro issue
+		// 		eprintln!(
+		// 			"Gemini API response missing candidates entirely (known issue with Gemini 2.5). Response: {}",
+		// 			serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string())
+		// 		);
+		// 	}
+
+		// 	// Return empty response - caller should handle this as a failed generation
+		// 	let usage = body.x_take::<Value>("usageMetadata").map(Self::into_usage).unwrap_or_default();
+		// 	return Ok(GeminiChatResponse { content, usage });
+		// }
 
 		let parts = body.x_take::<Vec<Value>>("/candidates/0/content/parts")?;
 		for mut part in parts {
