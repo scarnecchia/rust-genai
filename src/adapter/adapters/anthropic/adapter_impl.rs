@@ -465,12 +465,15 @@ impl AnthropicAdapter {
 								.filter_map(|part| match part {
 									ContentPart::Text(text) => Some(json!({"type": "text", "text": text})),
 									ContentPart::Image { content_type, source } => match source {
-										ImageSource::Url(_) => {
-											// TODO: Might need to return an error here.
-											warn!(
-												"Anthropic doesn't support images from URL, need to handle it gracefully"
-											);
-											None
+										ImageSource::Url(url) => {
+											// Anthropic now supports URL images
+											Some(json!({
+												"type": "image",
+												"source": {
+													"type": "url",
+													"url": url,
+												}
+											}))
 										}
 										ImageSource::Base64(content) => Some(json!({
 											"type": "image",
