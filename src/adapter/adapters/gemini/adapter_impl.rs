@@ -511,22 +511,23 @@ impl GeminiAdapter {
 							json!(
 								parts
 									.iter()
-									.map(|part| match part {
-										ContentPart::Text(text) => json!({"text": text.clone()}),
+									.filter_map(|part| match part {
+										ContentPart::Text(text) => Some(json!({"text": text.clone()})),
 										ContentPart::Image { content_type, source } => {
 											match source {
-												ImageSource::Url(url) => json!({
-													"file_data": {
-														"mime_type": content_type,
-														"file_uri": url
-													}
-												}),
-												ImageSource::Base64(content) => json!({
+												ImageSource::Url(_url) => {
+													// URLs should have been converted to base64 by Pattern for Gemini
+													tracing::warn!(
+														"Gemini received URL image that should have been converted to base64"
+													);
+													None
+												}
+												ImageSource::Base64(content) => Some(json!({
 													"inline_data": {
 														"mime_type": content_type,
 														"data": content
 													}
-												}),
+												})),
 											}
 										}
 									})
