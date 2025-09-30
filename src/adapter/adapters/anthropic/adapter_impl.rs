@@ -35,7 +35,9 @@ const MAX_TOKENS_4K: u32 = 4096; // claude-3-opus, claude-3-haiku
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MODELS: &[&str] = &[
+	"claude-opus-4-1-20250805",
 	"claude-opus-4-20250514",
+	"claude-sonnet-4-5-20250929",
 	"claude-sonnet-4-20250514",
 	"claude-3-7-sonnet-latest",
 	"claude-3-5-haiku-latest",
