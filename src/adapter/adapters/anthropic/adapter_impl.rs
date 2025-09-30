@@ -700,7 +700,7 @@ impl AnthropicAdapter {
 		};
 
 		// -- Process the tools
-		let tools = chat_req.tools.map(|tools| {
+		let mut tools = chat_req.tools.map(|tools| {
 			tools
 				.into_iter()
 				.map(|tool| {
@@ -721,6 +721,10 @@ impl AnthropicAdapter {
 				.collect::<Vec<Value>>()
 		});
 
+		if let Some(tool) = tools.as_mut().and_then(|t| t.last_mut()).and_then(|t| t.as_object_mut()) {
+			tool.insert("cache_control".to_string(), json!({"type": "ephemeral", "ttl": "1h"}));
+		}
+
 		Ok(AnthropicRequestParts {
 			system,
 			messages,
@@ -732,7 +736,7 @@ impl AnthropicAdapter {
 /// Apply the cache control logic to a text content
 fn apply_cache_control_to_text(is_cache_control: bool, content: String) -> Value {
 	if is_cache_control {
-		let value = json!({"type": "text", "text": content, "cache_control": {"type": "ephemeral"}});
+		let value = json!({"type": "text", "text": content, "cache_control": {"type": "ephemeral", "ttl": "1h"}});
 		json!(vec![value])
 	}
 	// simple return
@@ -748,7 +752,7 @@ fn apply_cache_control_to_parts(is_cache_control: bool, parts: Vec<Value>) -> Ve
 		let len = parts.len();
 		if let Some(last_value) = parts.get_mut(len - 1) {
 			// NOTE: For now, if it fails, then, no cache
-			let _ = last_value.x_insert("cache_control", json!( {"type": "ephemeral"}));
+			let _ = last_value.x_insert("cache_control", json!( {"type": "ephemeral", "ttl": "1h"}));
 			// TODO: Should warn
 		}
 	}
