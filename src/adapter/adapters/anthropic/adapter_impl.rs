@@ -657,9 +657,9 @@ impl AnthropicAdapter {
 					};
 
 					let mut part = json!({"type": "text", "text": text});
-					// Apply cache control if specified
-					if *is_cache_control {
-						part["cache_control"] = json!({"type": "ephemeral"});
+					// Apply cache control if specified or on the last system message
+					if *is_cache_control || (idx == systems.len() - 1) {
+						part["cache_control"] = json!({"type": "ephemeral", "ttl": "1h"});
 					}
 					parts.push(part);
 				}
@@ -679,7 +679,7 @@ impl AnthropicAdapter {
 					for (idx, (content, _)) in systems.iter().enumerate() {
 						let idx = idx as i32;
 						if idx == last_cache_idx {
-							let part = json!({"type": "text", "text": content, "cache_control": {"type": "ephemeral"}});
+							let part = json!({"type": "text", "text": content, "cache_control": {"type": "ephemeral", "ttl": "1h"}});
 							parts.push(part);
 						} else {
 							let part = json!({"type": "text", "text": content});
