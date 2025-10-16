@@ -40,6 +40,7 @@ const MODELS: &[&str] = &[
 	"claude-sonnet-4-5-20250929",
 	"claude-sonnet-4-20250514",
 	"claude-3-7-sonnet-latest",
+	"claude-haiku-4-5-20251001",
 	"claude-3-5-haiku-latest",
 	"claude-3-opus-20240229",
 	"claude-3-haiku-20240307",
