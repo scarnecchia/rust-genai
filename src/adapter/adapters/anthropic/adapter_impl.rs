@@ -191,18 +191,26 @@ impl Adapter for AnthropicAdapter {
 		}
 
 		// -- Add other supported ChatOptions
+		// Check if model requires temperature/top_p exclusivity (Claude 4.5)
+		let is_claude_4_5 = Self::is_claude_4_5(model_name);
+
 		// Temperature cannot be set when thinking is enabled
-		if !thinking_enabled {
+		let temperature_set = if !thinking_enabled {
 			if let Some(temperature) = options_set.temperature() {
 				payload.x_insert("temperature", temperature)?;
+				true
+			} else {
+				false
 			}
-		}
+		} else {
+			false
+		};
 
 		if !options_set.stop_sequences().is_empty() {
 			payload.x_insert("stop_sequences", options_set.stop_sequences())?;
 		}
 
-		// top_p restrictions when thinking is enabled
+		// top_p restrictions when thinking is enabled or when using Claude 4.5 with temperature
 		if let Some(top_p) = options_set.top_p() {
 			if thinking_enabled {
 				// When thinking is enabled, top_p must be between 0.95 and 1
@@ -210,8 +218,14 @@ impl Adapter for AnthropicAdapter {
 					payload.x_insert("top_p", top_p)?;
 				}
 				// Otherwise skip setting top_p
+			} else if is_claude_4_5 && temperature_set {
+				// Claude 4.5 cannot use both temperature and top_p - skip top_p when temperature is set
+				warn!(
+					"Model {} does not support both temperature and top_p. Using temperature, ignoring top_p.",
+					model_name
+				);
 			} else {
-				// Normal top_p when thinking is disabled
+				// Normal top_p when thinking is disabled and no temperature conflict
 				payload.x_insert("top_p", top_p)?;
 			}
 		}
@@ -390,6 +404,12 @@ impl Adapter for AnthropicAdapter {
 // region:    --- Support
 
 impl AnthropicAdapter {
+	/// Check if the model is Claude 4.5, which requires temperature/top_p exclusivity.
+	/// Claude 4.5 models cannot use both temperature and top_p together.
+	fn is_claude_4_5(model_name: &str) -> bool {
+		model_name.contains("-4-5-")
+	}
+
 	pub(super) fn into_usage(mut usage_value: Value) -> Usage {
 		// IMPORTANT: For Anthropic, the `input_tokens` does not include `cache_creation_input_tokens` or `cache_read_input_tokens`.
 		// Therefore, it must be normalized in the OpenAI style, where it includes both cached and written tokens (for symmetry).
