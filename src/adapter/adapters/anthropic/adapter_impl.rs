@@ -110,7 +110,8 @@ impl Adapter for AnthropicAdapter {
 		let (model_name, _) = model.model_name.as_model_name_and_namespace();
 		let supports_thinking = model_name.contains("claude-opus-4")
 			|| model_name.contains("claude-sonnet-4")
-			|| model_name.contains("claude-3-7-sonnet");
+			|| model_name.contains("claude-3-7-sonnet")
+			|| model_name.contains("claude-haiku-4-5");
 
 		let thinking_enabled = if supports_thinking {
 			match options_set.reasoning_effort() {
