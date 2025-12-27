@@ -8,5 +8,6 @@ pub(super) mod groq;
 pub(super) mod nebius;
 pub(super) mod ollama;
 pub(super) mod openai;
+pub(super) mod openrouter;
 pub(super) mod xai;
 pub(super) mod zhipu;

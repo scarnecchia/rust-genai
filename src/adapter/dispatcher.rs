@@ -4,6 +4,7 @@ use crate::adapter::cohere::CohereAdapter;
 use crate::adapter::gemini::GeminiAdapter;
 use crate::adapter::ollama::OllamaAdapter;
 use crate::adapter::openai::OpenAIAdapter;
+use crate::adapter::openrouter::OpenRouterAdapter;
 use crate::adapter::{Adapter, AdapterKind, ServiceType, WebRequestData};
 use crate::chat::{ChatOptionsSet, ChatRequest, ChatResponse, ChatStreamResponse};
 use crate::embed::{EmbedOptionsSet, EmbedRequest, EmbedResponse};
@@ -35,6 +36,7 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::default_endpoint(),
 			AdapterKind::Groq => GroqAdapter::default_endpoint(),
 			AdapterKind::Nebius => NebiusAdapter::default_endpoint(),
+			AdapterKind::OpenRouter => OpenRouterAdapter::default_endpoint(),
 			AdapterKind::Xai => XaiAdapter::default_endpoint(),
 			AdapterKind::DeepSeek => DeepSeekAdapter::default_endpoint(),
 			AdapterKind::Zhipu => ZhipuAdapter::default_endpoint(),
@@ -50,6 +52,7 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::default_auth(),
 			AdapterKind::Groq => GroqAdapter::default_auth(),
 			AdapterKind::Nebius => NebiusAdapter::default_auth(),
+			AdapterKind::OpenRouter => OpenRouterAdapter::default_auth(),
 			AdapterKind::Xai => XaiAdapter::default_auth(),
 			AdapterKind::DeepSeek => DeepSeekAdapter::default_auth(),
 			AdapterKind::Zhipu => ZhipuAdapter::default_auth(),
@@ -65,6 +68,7 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::all_model_names(kind).await,
 			AdapterKind::Groq => GroqAdapter::all_model_names(kind).await,
 			AdapterKind::Nebius => NebiusAdapter::all_model_names(kind).await,
+			AdapterKind::OpenRouter => OpenRouterAdapter::all_model_names(kind).await,
 			AdapterKind::Xai => XaiAdapter::all_model_names(kind).await,
 			AdapterKind::DeepSeek => DeepSeekAdapter::all_model_names(kind).await,
 			AdapterKind::Zhipu => ZhipuAdapter::all_model_names(kind).await,
@@ -80,6 +84,7 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::get_service_url(model, service_type, endpoint),
 			AdapterKind::Groq => GroqAdapter::get_service_url(model, service_type, endpoint),
 			AdapterKind::Nebius => NebiusAdapter::get_service_url(model, service_type, endpoint),
+			AdapterKind::OpenRouter => OpenRouterAdapter::get_service_url(model, service_type, endpoint),
 			AdapterKind::Xai => XaiAdapter::get_service_url(model, service_type, endpoint),
 			AdapterKind::DeepSeek => DeepSeekAdapter::get_service_url(model, service_type, endpoint),
 			AdapterKind::Zhipu => ZhipuAdapter::get_service_url(model, service_type, endpoint),
@@ -103,6 +108,9 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::to_web_request_data(target, service_type, chat_req, options_set),
 			AdapterKind::Groq => GroqAdapter::to_web_request_data(target, service_type, chat_req, options_set),
 			AdapterKind::Nebius => NebiusAdapter::to_web_request_data(target, service_type, chat_req, options_set),
+			AdapterKind::OpenRouter => {
+				OpenRouterAdapter::to_web_request_data(target, service_type, chat_req, options_set)
+			}
 			AdapterKind::Xai => XaiAdapter::to_web_request_data(target, service_type, chat_req, options_set),
 			AdapterKind::DeepSeek => DeepSeekAdapter::to_web_request_data(target, service_type, chat_req, options_set),
 			AdapterKind::Zhipu => ZhipuAdapter::to_web_request_data(target, service_type, chat_req, options_set),
@@ -122,6 +130,7 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::to_chat_response(model_iden, web_response, options_set),
 			AdapterKind::Groq => GroqAdapter::to_chat_response(model_iden, web_response, options_set),
 			AdapterKind::Nebius => NebiusAdapter::to_chat_response(model_iden, web_response, options_set),
+			AdapterKind::OpenRouter => OpenRouterAdapter::to_chat_response(model_iden, web_response, options_set),
 			AdapterKind::Xai => XaiAdapter::to_chat_response(model_iden, web_response, options_set),
 			AdapterKind::DeepSeek => DeepSeekAdapter::to_chat_response(model_iden, web_response, options_set),
 			AdapterKind::Zhipu => ZhipuAdapter::to_chat_response(model_iden, web_response, options_set),
@@ -141,6 +150,7 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::to_chat_stream(model_iden, reqwest_builder, options_set),
 			AdapterKind::Groq => GroqAdapter::to_chat_stream(model_iden, reqwest_builder, options_set),
 			AdapterKind::Nebius => NebiusAdapter::to_chat_stream(model_iden, reqwest_builder, options_set),
+			AdapterKind::OpenRouter => OpenRouterAdapter::to_chat_stream(model_iden, reqwest_builder, options_set),
 			AdapterKind::Xai => XaiAdapter::to_chat_stream(model_iden, reqwest_builder, options_set),
 			AdapterKind::DeepSeek => DeepSeekAdapter::to_chat_stream(model_iden, reqwest_builder, options_set),
 			AdapterKind::Zhipu => ZhipuAdapter::to_chat_stream(model_iden, reqwest_builder, options_set),
@@ -161,6 +171,7 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::to_embed_request_data(target, embed_req, options_set),
 			AdapterKind::Groq => GroqAdapter::to_embed_request_data(target, embed_req, options_set),
 			AdapterKind::Nebius => NebiusAdapter::to_embed_request_data(target, embed_req, options_set),
+			AdapterKind::OpenRouter => OpenRouterAdapter::to_embed_request_data(target, embed_req, options_set),
 			AdapterKind::Xai => XaiAdapter::to_embed_request_data(target, embed_req, options_set),
 			AdapterKind::DeepSeek => DeepSeekAdapter::to_embed_request_data(target, embed_req, options_set),
 			AdapterKind::Zhipu => ZhipuAdapter::to_embed_request_data(target, embed_req, options_set),
@@ -180,6 +191,7 @@ impl AdapterDispatcher {
 			AdapterKind::Gemini => GeminiAdapter::to_embed_response(model_iden, web_response, options_set),
 			AdapterKind::Groq => GroqAdapter::to_embed_response(model_iden, web_response, options_set),
 			AdapterKind::Nebius => NebiusAdapter::to_embed_response(model_iden, web_response, options_set),
+			AdapterKind::OpenRouter => OpenRouterAdapter::to_embed_response(model_iden, web_response, options_set),
 			AdapterKind::Xai => XaiAdapter::to_embed_response(model_iden, web_response, options_set),
 			AdapterKind::DeepSeek => DeepSeekAdapter::to_embed_response(model_iden, web_response, options_set),
 			AdapterKind::Zhipu => ZhipuAdapter::to_embed_response(model_iden, web_response, options_set),
