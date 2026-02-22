@@ -5,6 +5,7 @@ use crate::adapter::gemini::GeminiAdapter;
 use crate::adapter::groq::{self, GroqAdapter};
 use crate::adapter::nebius::NebiusAdapter;
 use crate::adapter::openai::OpenAIAdapter;
+use crate::adapter::openrouter::OpenRouterAdapter;
 use crate::adapter::xai::XaiAdapter;
 use crate::adapter::zhipu::ZhipuAdapter;
 use crate::{ModelName, Result};
@@ -29,6 +30,8 @@ pub enum AdapterKind {
 	Groq,
 	/// For Nebius
 	Nebius,
+	/// For OpenRouter - a unified API for 100+ LLM models. Uses OpenAI-compatible API.
+	OpenRouter,
 	/// For xAI
 	Xai,
 	/// For DeepSeek
@@ -51,6 +54,7 @@ impl AdapterKind {
 			AdapterKind::Gemini => "Gemini",
 			AdapterKind::Groq => "Groq",
 			AdapterKind::Nebius => "Nebius",
+			AdapterKind::OpenRouter => "OpenRouter",
 			AdapterKind::Xai => "xAi",
 			AdapterKind::DeepSeek => "DeepSeek",
 			AdapterKind::Zhipu => "Zhipu",
@@ -67,6 +71,7 @@ impl AdapterKind {
 			AdapterKind::Gemini => "gemini",
 			AdapterKind::Groq => "groq",
 			AdapterKind::Nebius => "nebius",
+			AdapterKind::OpenRouter => "openrouter",
 			AdapterKind::Xai => "xai",
 			AdapterKind::DeepSeek => "deepseek",
 			AdapterKind::Zhipu => "zhipu",
@@ -82,6 +87,7 @@ impl AdapterKind {
 			"gemini" => Some(AdapterKind::Gemini),
 			"groq" => Some(AdapterKind::Groq),
 			"nebius" => Some(AdapterKind::Nebius),
+			"openrouter" => Some(AdapterKind::OpenRouter),
 			"xai" => Some(AdapterKind::Xai),
 			"deepseek" => Some(AdapterKind::DeepSeek),
 			"zhipu" => Some(AdapterKind::Zhipu),
@@ -101,6 +107,7 @@ impl AdapterKind {
 			AdapterKind::Gemini => Some(GeminiAdapter::API_KEY_DEFAULT_ENV_NAME),
 			AdapterKind::Groq => Some(GroqAdapter::API_KEY_DEFAULT_ENV_NAME),
 			AdapterKind::Nebius => Some(NebiusAdapter::API_KEY_DEFAULT_ENV_NAME),
+			AdapterKind::OpenRouter => Some(OpenRouterAdapter::API_KEY_DEFAULT_ENV_NAME),
 			AdapterKind::Xai => Some(XaiAdapter::API_KEY_DEFAULT_ENV_NAME),
 			AdapterKind::DeepSeek => Some(DeepSeekAdapter::API_KEY_DEFAULT_ENV_NAME),
 			AdapterKind::Zhipu => Some(ZhipuAdapter::API_KEY_DEFAULT_ENV_NAME),
